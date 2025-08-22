@@ -4,3 +4,11 @@ dist
 server/public
 vite.config.ts.*
 *.tar.gz
+
+# Exclude test directories and data from deployment
+test/
+tests/
+**test**/
+**/test/**
+**/*.test.*
+**/*.spec.*

@@ -41,9 +41,14 @@ async function extractTextFromFile(file: Express.Multer.File): Promise<string> {
   try {
     // Handle PDF files
     if (mimetype === 'application/pdf') {
-      const pdfParse = await import('pdf-parse');
-      const data = await pdfParse.default(buffer);
-      return data.text;
+      try {
+        const pdfParse = await import('pdf-parse') as any;
+        const data = await pdfParse.default(buffer);
+        return data.text;
+      } catch (pdfError) {
+        console.error('PDF parsing error:', pdfError);
+        throw new Error('Failed to parse PDF file. The file may be corrupted or password-protected.');
+      }
     }
     
     // Handle DOCX files
