@@ -6,14 +6,34 @@ import {
   generateMangaScript,
   generateIllustratorPrompts,
   generatePanelImage,
-} from "../lib/manga-api";
+  checkAPIStatus,
+} from "../lib/manga-api-server";
+import {
+  saveProject,
+  loadProject,
+  updateProject,
+  listProjects,
+  saveImage,
+  loadProjectImages,
+} from "../lib/manga-storage";
 import Sidebar from "../components/manga-generator/sidebar";
 import MainContent from "../components/manga-generator/main-content";
 import LoadingOverlay from "../components/manga-generator/loading-overlay";
 import { useToast } from "../hooks/use-toast";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Label } from "@/components/ui/label";
 
 export default function MangaGenerator() {
-  const [apiKey, setApiKey] = useState("");
+  const [apiKeyConfigured, setApiKeyConfigured] = useState(false);
   const [inputText, setInputText] = useState("");
   const [settings, setSettings] = useState<GenerationSettings>({
     chatModel: "gpt-4o-mini",
@@ -30,24 +50,34 @@ export default function MangaGenerator() {
   const [isGeneratingImages, setIsGeneratingImages] = useState(false);
   const [generatingPanels, setGeneratingPanels] = useState<Set<string>>(new Set());
   const [status, setStatus] = useState("Ready to begin");
+  const [currentProjectId, setCurrentProjectId] = useState<number | null>(null);
+  const [showSaveDialog, setShowSaveDialog] = useState(false);
+  const [showLoadDialog, setShowLoadDialog] = useState(false);
+  const [projectTitle, setProjectTitle] = useState("");
+  const [projectDescription, setProjectDescription] = useState("");
+  const [savedProjects, setSavedProjects] = useState<any[]>([]);
 
   const { toast } = useToast();
 
-  // Persist API key locally
+  // Check if API key is configured on server
   useEffect(() => {
-    const savedKey = localStorage.getItem("OPENAI_API_KEY");
-    if (savedKey) setApiKey(savedKey);
+    checkAPIStatus().then(configured => {
+      setApiKeyConfigured(configured);
+      if (!configured) {
+        toast({
+          title: "API Key Not Configured",
+          description: "OpenAI API key is not configured on the server",
+          variant: "destructive",
+        });
+      }
+    });
   }, []);
 
-  useEffect(() => {
-    if (apiKey) localStorage.setItem("OPENAI_API_KEY", apiKey);
-  }, [apiKey]);
-
   const handleGenerateScript = async () => {
-    if (!apiKey) {
+    if (!apiKeyConfigured) {
       toast({
-        title: "API Key Required",
-        description: "Please enter your OpenAI API key",
+        title: "API Key Not Configured",
+        description: "OpenAI API key is not configured on the server",
         variant: "destructive",
       });
       return;
@@ -67,7 +97,6 @@ export default function MangaGenerator() {
 
     try {
       const generatedScript = await generateMangaScript(
-        apiKey,
         inputText,
         settings.chatModel,
         settings.desiredPages
@@ -94,14 +123,13 @@ export default function MangaGenerator() {
   };
 
   const handleBuildIllustratorPrompts = async () => {
-    if (!script || !apiKey) return;
+    if (!script || !apiKeyConfigured) return;
 
     setStatus("Building illustrator prompts...");
 
     try {
       const allPanels = script.pages.flatMap(page => page.panels);
       const prompts = await generateIllustratorPrompts(
-        apiKey,
         settings.chatModel,
         script.style_bible,
         allPanels
@@ -127,7 +155,7 @@ export default function MangaGenerator() {
   };
 
   const handleGenerateAllImages = async () => {
-    if (!script || !apiKey) return;
+    if (!script || !apiKeyConfigured) return;
 
     setIsGeneratingImages(true);
     setStatus("Generating all panel images...");
@@ -147,7 +175,6 @@ export default function MangaGenerator() {
             : undefined;
 
           const imageUrl = await generatePanelImage(
-            apiKey,
             panel,
             script.style_bible,
             settings.imageSize,
@@ -189,7 +216,7 @@ export default function MangaGenerator() {
   };
 
   const handleGeneratePanelImage = async (panel: Panel) => {
-    if (!script || !apiKey) return;
+    if (!script || !apiKeyConfigured) return;
 
     setGeneratingPanels(prev => new Set(prev).add(panel.id));
     setStatus(`Generating panel ${panel.id}...`);
@@ -200,7 +227,6 @@ export default function MangaGenerator() {
         : undefined;
 
       const imageUrl = await generatePanelImage(
-        apiKey,
         panel,
         script.style_bible,
         settings.imageSize,
@@ -299,14 +325,122 @@ export default function MangaGenerator() {
     }
   };
 
+  const handleSaveProject = async () => {
+    if (!script) {
+      toast({
+        title: "No Script",
+        description: "Generate a script first before saving",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    try {
+      const projectData = {
+        title: projectTitle || script.title,
+        description: projectDescription,
+        inputText,
+        scriptData: script,
+        settings,
+        illustratorPrompts: Object.keys(illustratorPrompts).length > 0 ? illustratorPrompts : undefined,
+      };
+
+      let project;
+      if (currentProjectId) {
+        project = await updateProject(currentProjectId, projectData);
+        toast({
+          title: "Project Updated",
+          description: "Your manga project has been updated",
+        });
+      } else {
+        project = await saveProject(projectData);
+        setCurrentProjectId(project.id);
+        toast({
+          title: "Project Saved",
+          description: "Your manga project has been saved to the database",
+        });
+      }
+
+      // Save images if they exist
+      for (const [panelId, imageData] of Object.entries(images)) {
+        await saveImage({
+          projectId: project.id,
+          panelId,
+          imageData,
+        });
+      }
+
+      setShowSaveDialog(false);
+    } catch (error) {
+      console.error("Failed to save project:", error);
+      toast({
+        title: "Save Failed",
+        description: "Failed to save your project",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleLoadProjects = async () => {
+    try {
+      const projects = await listProjects();
+      setSavedProjects(projects);
+      setShowLoadDialog(true);
+    } catch (error) {
+      console.error("Failed to load projects:", error);
+      toast({
+        title: "Load Failed",
+        description: "Failed to load saved projects",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleLoadProject = async (projectId: number) => {
+    try {
+      const { project, images: loadedImages } = await loadProject(projectId);
+      
+      setCurrentProjectId(project.id);
+      setInputText(project.inputText);
+      setScript(project.scriptData as MangaScript);
+      setSettings(project.settings as GenerationSettings);
+      
+      if (project.illustratorPrompts) {
+        setIllustratorPrompts(project.illustratorPrompts as Record<string, string>);
+      }
+      
+      // Convert loaded images to the correct format
+      const imageMap: Record<string, string> = {};
+      for (const img of loadedImages) {
+        imageMap[img.panelId] = img.imageData;
+      }
+      setImages(imageMap);
+      
+      setProjectTitle(project.title);
+      setProjectDescription(project.description || "");
+      setShowLoadDialog(false);
+      
+      toast({
+        title: "Project Loaded",
+        description: `Loaded project: ${project.title}`,
+      });
+    } catch (error) {
+      console.error("Failed to load project:", error);
+      toast({
+        title: "Load Failed",
+        description: "Failed to load the selected project",
+        variant: "destructive",
+      });
+    }
+  };
+
   const showLoadingOverlay = isGeneratingScript || isGeneratingImages;
 
   return (
     <div className="min-h-screen bg-neutral-950 text-neutral-100 font-inter antialiased">
       <div className="flex">
         <Sidebar
-          apiKey={apiKey}
-          setApiKey={setApiKey}
+          apiKeyConfigured={apiKeyConfigured}
           inputText={inputText}
           setInputText={setInputText}
           settings={settings}
@@ -317,6 +451,11 @@ export default function MangaGenerator() {
           isGeneratingScript={isGeneratingScript}
           isGeneratingImages={isGeneratingImages}
           hasScript={!!script}
+          onSaveProject={() => {
+            setProjectTitle(script?.title || "");
+            setShowSaveDialog(true);
+          }}
+          onLoadProjects={handleLoadProjects}
         />
         
         <MainContent
@@ -335,6 +474,103 @@ export default function MangaGenerator() {
         isVisible={showLoadingOverlay}
         status={status}
       />
+
+      {/* Save Project Dialog */}
+      <Dialog open={showSaveDialog} onOpenChange={setShowSaveDialog}>
+        <DialogContent className="bg-neutral-900 border-neutral-800 text-neutral-100">
+          <DialogHeader>
+            <DialogTitle>{currentProjectId ? "Update Project" : "Save Project"}</DialogTitle>
+            <DialogDescription className="text-neutral-400">
+              Save your manga project to the database for later editing
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <Label htmlFor="title">Project Title</Label>
+              <Input
+                id="title"
+                value={projectTitle}
+                onChange={(e) => setProjectTitle(e.target.value)}
+                placeholder="Enter project title"
+                className="bg-neutral-800 border-neutral-700 text-neutral-100"
+                data-testid="input-project-title"
+              />
+            </div>
+            <div>
+              <Label htmlFor="description">Description (optional)</Label>
+              <Textarea
+                id="description"
+                value={projectDescription}
+                onChange={(e) => setProjectDescription(e.target.value)}
+                placeholder="Enter project description"
+                className="bg-neutral-800 border-neutral-700 text-neutral-100"
+                rows={3}
+                data-testid="textarea-project-description"
+              />
+            </div>
+            <div className="flex gap-2 justify-end">
+              <Button
+                variant="outline"
+                onClick={() => setShowSaveDialog(false)}
+                className="bg-neutral-800 border-neutral-700 text-neutral-100 hover:bg-neutral-700"
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={handleSaveProject}
+                className="bg-fuchsia-500 hover:bg-fuchsia-600 text-white"
+                data-testid="button-save-project-confirm"
+              >
+                {currentProjectId ? "Update" : "Save"}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Load Projects Dialog */}
+      <Dialog open={showLoadDialog} onOpenChange={setShowLoadDialog}>
+        <DialogContent className="bg-neutral-900 border-neutral-800 text-neutral-100 max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Load Project</DialogTitle>
+            <DialogDescription className="text-neutral-400">
+              Select a saved project to continue editing
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2 max-h-96 overflow-y-auto">
+            {savedProjects.length === 0 ? (
+              <p className="text-center text-neutral-500 py-8">No saved projects found</p>
+            ) : (
+              savedProjects.map((project) => (
+                <div
+                  key={project.id}
+                  className="p-4 bg-neutral-800 rounded-lg border border-neutral-700 hover:border-neutral-600 cursor-pointer transition-colors"
+                  onClick={() => handleLoadProject(project.id)}
+                  data-testid={`project-item-${project.id}`}
+                >
+                  <h3 className="font-semibold mb-1">{project.title}</h3>
+                  {project.description && (
+                    <p className="text-sm text-neutral-400 mb-2">{project.description}</p>
+                  )}
+                  <div className="flex gap-4 text-xs text-neutral-500">
+                    <span>Status: {project.status}</span>
+                    <span>Created: {new Date(project.createdAt).toLocaleDateString()}</span>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+          <div className="flex justify-end">
+            <Button
+              variant="outline"
+              onClick={() => setShowLoadDialog(false)}
+              className="bg-neutral-800 border-neutral-700 text-neutral-100 hover:bg-neutral-700"
+            >
+              Cancel
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
