@@ -2,6 +2,7 @@ import type { Express } from "express";
 import type { Request, Response } from "express";
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+const HF_API_KEY = process.env.HF_API_KEY;
 
 async function openaiChat(params: {
   model: string;
@@ -49,43 +50,38 @@ async function openaiImage(params: {
   prompt: string;
   size?: string;
 }): Promise<string> {
-  if (!OPENAI_API_KEY) {
-    throw new Error("OPENAI_API_KEY is not configured");
+  if (!HF_API_KEY) {
+    throw new Error("HF_API_KEY is not configured");
   }
 
-  const res = await fetch("https://api.openai.com/v1/images/generations", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${OPENAI_API_KEY}`,
-    },
-    body: JSON.stringify({
-      model: "dall-e-3",
-      prompt: params.prompt,
-      size: params.size || "1024x1024",
-      response_format: "b64_json",
-    }),
-  });
+  const res = await fetch(
+    "https://api-inference.huggingface.co/models/gsdf/Counterfeit-V2.5", 
+    {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${HF_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ inputs: params.prompt }),
+    }
+  );
 
   if (!res.ok) {
-    const errorData = await res.json().catch(() => ({}));
-    throw new Error(`OpenAI Image API error: ${res.status} - ${errorData.error?.message || res.statusText}`);
+    const errorText = await res.text().catch(() => '');
+    throw new Error(`HuggingFace API failed: ${res.status} - ${errorText}`);
   }
 
-  const data = await res.json();
-  const b64 = data.data?.[0]?.b64_json;
-  if (!b64) {
-    throw new Error("No image returned from OpenAI.");
-  }
-  return `data:image/png;base64,${b64}`;
+  const arrayBuffer = await res.arrayBuffer();
+  const base64 = Buffer.from(arrayBuffer).toString('base64');
+  return `data:image/png;base64,${base64}`;
 }
 
 export function registerOpenAIRoutes(app: Express) {
   // Check if API key is configured
   app.get("/api/openai/status", (req: Request, res: Response) => {
     res.json({ 
-      configured: !!OPENAI_API_KEY,
-      message: OPENAI_API_KEY ? "OpenAI API key is configured" : "OpenAI API key is not configured"
+      configured: !!OPENAI_API_KEY && !!HF_API_KEY,
+      message: OPENAI_API_KEY && HF_API_KEY ? "OpenAI API key and HuggingFace API key are configured" : "API keys not fully configured"
     });
   });
 
