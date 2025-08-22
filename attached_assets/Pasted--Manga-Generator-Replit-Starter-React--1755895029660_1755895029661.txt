@@ -1,0 +1,512 @@
+// Manga Generator Replit Starter (React)
+// ------------------------------------------------------------
+// What this gives you:
+// - A single-file React app that:
+//   1) Takes any input text and converts it into a structured manga script (pages/panels) using OpenAI Chat Completions.
+//   2) Generates manga-style black & white panel images via OpenAI Images (gpt-image-1) per panel.
+//   3) Lets you edit prompts, regenerate panels, and export a .zip (CBZ) of your chapter.
+// - Paste this into a Replit React (Vite) project as src/App.jsx (or use Next.js app/page.jsx with minor tweaks).
+// - Set OPENAI_API_KEY in Replit Secrets. For local dev, you can paste it once into the UI (stored in localStorage).
+//
+// Quick Start (Replit):
+// 1) Create a new Replit: React + Vite.
+// 2) Add Tailwind (optional) or keep the default styles — this file uses utility classes but will still render without Tailwind.
+// 3) Create a serverless endpoint (optional) if you don't want to expose your key client-side. For demo, this calls OpenAI directly from the client.
+// 4) Add your OPENAI_API_KEY to Replit Secrets panel.
+// 5) Replace the placeholder imports or remove them if your template doesn't support them.
+// ------------------------------------------------------------
+
+import React, { useEffect, useMemo, useRef, useState } from "react";
+
+// Optional icons (comment out if not installed)
+// npm i lucide-react
+import { Play, Loader2, Download, Wand2, Image as ImageIcon, FileJson, Settings, AlertTriangle, FilePenLine, RefreshCw } from "lucide-react";
+
+// Optional: JSZip for exports
+// npm i jszip file-saver
+import JSZip from "jszip";
+import { saveAs } from "file-saver";
+
+// ----------------------------
+// Utility: Default System Prompts
+// ----------------------------
+const SYSTEM_MANGA_GENERATOR = `You are a Manga Generator AI. Transform ANY input writing into a structured manga script with JSON output.
+Follow this JSON schema EXACTLY (no prose outside JSON):
+{
+  "title": string,
+  "style_bible": {
+    "setting": string,
+    "themes": string[],
+    "visual_motifs": string[],
+    "characters": [
+      {"name": string, "role": string, "age": string, "appearance": string, "costume": string, "poses": string[], "expressions": string[]}
+    ]
+  },
+  "pages": [
+    {
+      "number": number,
+      "panels": [
+        {
+          "id": string, // e.g. "1-1"
+          "description": string, // clear camera, action, setting
+          "dialogue": string[],  // plain lines; lettering handled later
+          "sfx": string[],       // onomatopoeia only, no quotes
+          "notes": string        // optional extra direction
+        }
+      ]
+    }
+  ]
+}
+
+Guidelines:
+- 18–28 pages; 4–7 panels per page (adjust to content length). If input is short, produce 8–12 pages.
+- Pacing: cold open ↦ inciting incident ↦ rising action ↦ beat at end of Chapter 1.
+- Visual direction: dynamic Japanese manga (black & white, crosshatching, screentones, speed lines).
+- Keep character designs consistent. Place meaningful cliffhanger at final page.
+- IMPORTANT: Output ONLY the JSON. No commentary.`;
+
+const SYSTEM_MANGA_ILLUSTRATOR = `You are Manga Illustrator AI. You receive structured panel descriptions and a style bible. Your task is to generate concise, unambiguous image prompts for manga-style, black-and-white panels suitable for an image model. You do NOT alter story beats.
+Return one prompt per panel, JSON array of objects: [{panel_id, prompt}]. The prompt MUST be <300 words and include: setting, characters with consistent appearance, composition, camera angle, lighting, linework, screentone notes, and where to leave negative space for bubbles if applicable.`;
+
+// Image model prompt boilerplate (prepended by buildImagePrompt)
+const IMAGE_STYLE_PRIMER = `Black-and-white Japanese manga panel. Dynamic composition. Clean inks, bold shadows, crosshatching, screentones, motion/speed lines. High contrast. Leave clear negative space for speech bubbles if dialogue exists. No color.`;
+
+// ----------------------------
+// API Helpers
+// ----------------------------
+async function openaiChat({ apiKey, model, system, user, temperature = 0.6, max_tokens = 4000 }) {
+  const res = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model,
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: user },
+      ],
+      temperature,
+      max_tokens,
+    }),
+  });
+  if (!res.ok) throw new Error(`Chat API error: ${res.status}`);
+  const data = await res.json();
+  const content = data.choices?.[0]?.message?.content?.trim();
+  if (!content) throw new Error("No content returned from chat model.");
+  return content;
+}
+
+async function openaiImage({ apiKey, prompt, size = "1024x1024" }) {
+  const res = await fetch("https://api.openai.com/v1/images/generations", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: "gpt-image-1",
+      prompt,
+      size,
+      response_format: "b64_json",
+    }),
+  });
+  if (!res.ok) throw new Error(`Image API error: ${res.status}`);
+  const data = await res.json();
+  const b64 = data.data?.[0]?.b64_json;
+  if (!b64) throw new Error("No image returned.");
+  return `data:image/png;base64,${b64}`;
+}
+
+// ----------------------------
+// Prompt Builders
+// ----------------------------
+function buildGeneratorUserPrompt(rawText, desiredPages = 20) {
+  return `Transform the following source text into a full Chapter 1 manga script. Target ~${desiredPages} pages.\n\nSOURCE:\n${rawText}`;
+}
+
+function buildIllustratorUserPrompt(styleBible, panels) {
+  const clamp = (s) => (s || "").slice(0, 2000);
+  return `STYLE_BIBLE (keep designs consistent):\n${clamp(JSON.stringify(styleBible, null, 2))}\n\nPANELS (produce one concise image prompt per panel):\n${clamp(JSON.stringify(panels, null, 2))}`;
+}
+
+function buildImagePrompt(panel, styleBible) {
+  const charList = (styleBible?.characters || [])
+    .map((c) => `${c.name}: ${c.appearance}; costume: ${c.costume}; typical poses: ${c.poses?.join(", ")}; expressions: ${c.expressions?.join(", ")}`)
+    .join(" | ");
+  const dialogueHint = panel.dialogue?.length
+    ? `Leave negative space along ${panel.dialogue.length > 1 ? "top and side" : "top"} for speech bubbles.`
+    : "Leave generous negative space for possible lettering.";
+
+  return [
+    IMAGE_STYLE_PRIMER,
+    `Panel ${panel.id}: ${panel.description}`,
+    `SFX cues: ${panel.sfx?.join(", ") || "none"}.` ,
+    `Characters: ${charList || "Follow style bible."}`,
+    `Camera/composition: Prioritize clarity of action; dynamic angle; readable silhouettes.`,
+    dialogueHint,
+  ].join("\n");
+}
+
+// ----------------------------
+// Main Component
+// ----------------------------
+export default function App() {
+  const [apiKey, setApiKey] = useState("");
+  const [chatModel, setChatModel] = useState("gpt-4o-mini");
+  const [inputText, setInputText] = useState("");
+  const [desiredPages, setDesiredPages] = useState(20);
+  const [scriptJSON, setScriptJSON] = useState(null);
+  const [parseError, setParseError] = useState("");
+  const [busyScript, setBusyScript] = useState(false);
+  const [busyImages, setBusyImages] = useState(false);
+  const [images, setImages] = useState({}); // key: panel.id => dataURL
+  const [status, setStatus] = useState("");
+  const [imageSize, setImageSize] = useState("1024x1024");
+  const [useIllustratorPass, setUseIllustratorPass] = useState(false);
+  const [illustratorPrompts, setIllustratorPrompts] = useState({}); // panel.id => prompt
+
+  // Persist key locally for convenience (dev only)
+  useEffect(() => {
+    const k = localStorage.getItem("OPENAI_API_KEY");
+    if (k) setApiKey(k);
+  }, []);
+  useEffect(() => {
+    if (apiKey) localStorage.setItem("OPENAI_API_KEY", apiKey);
+  }, [apiKey]);
+
+  const pages = scriptJSON?.pages || [];
+  const styleBible = scriptJSON?.style_bible || {};
+
+  async function handleGenerateScript() {
+    setParseError("");
+    setBusyScript(true);
+    setStatus("Generating manga script…");
+    try {
+      if (!apiKey) throw new Error("Missing OPENAI_API_KEY");
+      const user = buildGeneratorUserPrompt(inputText, desiredPages);
+      const raw = await openaiChat({
+        apiKey,
+        model: chatModel,
+        system: SYSTEM_MANGA_GENERATOR,
+        user,
+        temperature: 0.6,
+        max_tokens: 8000,
+      });
+      let json;
+      try {
+        json = JSON.parse(raw);
+      } catch (e) {
+        // Try to salvage JSON from fenced code
+        const match = raw.match(/```json([\s\S]*?)```/);
+        if (match) json = JSON.parse(match[1]);
+        else throw e;
+      }
+      setScriptJSON(json);
+      setStatus("Script generated. You can edit panels below or jump to image gen.");
+    } catch (err) {
+      console.error(err);
+      setParseError(String(err.message || err));
+      setStatus("Script generation failed.");
+    } finally {
+      setBusyScript(false);
+    }
+  }
+
+  async function handleIllustratorPass() {
+    if (!scriptJSON) return;
+    try {
+      setStatus("Creating illustrator prompts…");
+      const panelList = pages.flatMap((p) => p.panels.map((pn) => ({ panel_id: pn.id, description: pn.description })));
+      const user = buildIllustratorUserPrompt(styleBible, panelList);
+      const raw = await openaiChat({
+        apiKey,
+        model: chatModel,
+        system: SYSTEM_MANGA_ILLUSTRATOR,
+        user,
+        temperature: 0.4,
+        max_tokens: 6000,
+      });
+      const arr = JSON.parse(raw);
+      const map = {};
+      for (const item of arr) map[item.panel_id] = item.prompt;
+      setIllustratorPrompts(map);
+      setUseIllustratorPass(true);
+      setStatus("Illustrator prompts ready.");
+    } catch (e) {
+      console.error(e);
+      setStatus("Illustrator pass failed (falling back to built-in prompts).");
+      setUseIllustratorPass(false);
+    }
+  }
+
+  async function generateAllImages() {
+    if (!scriptJSON) return;
+    try {
+      setBusyImages(true);
+      setStatus("Generating images… this may take a bit.");
+      const newImages = { ...images };
+
+      for (const page of pages) {
+        for (const panel of page.panels) {
+          const prompt = useIllustratorPass && illustratorPrompts[panel.id]
+            ? `${IMAGE_STYLE_PRIMER}\n${illustratorPrompts[panel.id]}`
+            : buildImagePrompt(panel, styleBible);
+
+          // eslint-disable-next-line no-await-in-loop
+          const dataUrl = await openaiImage({ apiKey, prompt, size: imageSize });
+          newImages[panel.id] = dataUrl;
+          setImages({ ...newImages });
+        }
+      }
+      setStatus("All panel images generated.");
+    } catch (e) {
+      console.error(e);
+      setStatus("Image generation failed. You can retry panels individually.");
+    } finally {
+      setBusyImages(false);
+    }
+  }
+
+  async function generatePanelImage(panel) {
+    try {
+      const prompt = useIllustratorPass && illustratorPrompts[panel.id]
+        ? `${IMAGE_STYLE_PRIMER}\n${illustratorPrompts[panel.id]}`
+        : buildImagePrompt(panel, styleBible);
+      const dataUrl = await openaiImage({ apiKey, prompt, size: imageSize });
+      setImages((prev) => ({ ...prev, [panel.id]: dataUrl }));
+    } catch (e) {
+      console.error(e);
+      alert("Panel image failed. Check console.");
+    }
+  }
+
+  function downloadZip() {
+    if (!scriptJSON) return;
+    const zip = new JSZip();
+    zip.file("script.json", JSON.stringify(scriptJSON, null, 2));
+
+    for (const page of pages) {
+      for (const panel of page.panels) {
+        const dataUrl = images[panel.id];
+        if (!dataUrl) continue;
+        const base64 = dataUrl.split(",")[1];
+        zip.file(`page-${page.number}_panel-${panel.id}.png`, base64, { base64: true });
+      }
+    }
+
+    zip.generateAsync({ type: "blob" }).then((content) => {
+      saveAs(content, `${(scriptJSON.title || "chapter-1").replace(/\s+/g, "-")}.cbz`);
+    });
+  }
+
+  return (
+    <div className="min-h-screen w-full bg-neutral-950 text-neutral-100">
+      <header className="border-b border-neutral-800 p-4 flex items-center gap-3">
+        <Wand2 className="text-fuchsia-400" />
+        <h1 className="text-xl font-semibold tracking-wide">MangaForge — Chapter Generator</h1>
+        <div className="ml-auto flex items-center gap-2 text-sm">
+          <Settings size={16} />
+          <span className="opacity-75">Model:</span>
+          <select className="bg-neutral-900 border border-neutral-800 rounded px-2 py-1" value={chatModel} onChange={(e)=>setChatModel(e.target.value)}>
+            <option value="gpt-4o-mini">gpt-4o-mini</option>
+            <option value="gpt-4o">gpt-4o</option>
+            <option value="o4-mini">o4-mini</option>
+          </select>
+          <span className="opacity-75">Image Size:</span>
+          <select className="bg-neutral-900 border border-neutral-800 rounded px-2 py-1" value={imageSize} onChange={(e)=>setImageSize(e.target.value)}>
+            <option>1024x1024</option>
+            <option>768x768</option>
+            <option>512x512</option>
+          </select>
+        </div>
+      </header>
+
+      <main className="grid grid-cols-1 lg:grid-cols-3 gap-4 p-4">
+        {/* LEFT: Input / Controls */}
+        <section className="col-span-1 space-y-3">
+          <div className="bg-neutral-900/60 rounded-2xl p-4 border border-neutral-800">
+            <div className="flex items-center gap-2 mb-2 text-sm opacity-80"><Settings size={16}/> OpenAI Key</div>
+            <input
+              value={apiKey}
+              onChange={(e)=>setApiKey(e.target.value)}
+              type="password"
+              placeholder="sk-…"
+              className="w-full bg-neutral-950 border border-neutral-800 rounded px-3 py-2"
+            />
+            <p className="text-xs opacity-70 mt-2">Stored locally for demo. For production, proxy via a serverless endpoint.</p>
+          </div>
+
+          <div className="bg-neutral-900/60 rounded-2xl p-4 border border-neutral-800 space-y-3">
+            <div className="flex items-center gap-2 text-sm opacity-80"><FilePenLine size={16}/> Source Text</div>
+            <textarea
+              value={inputText}
+              onChange={(e)=>setInputText(e.target.value)}
+              rows={12}
+              placeholder="Paste your chapter, scene, or any text…"
+              className="w-full bg-neutral-950 border border-neutral-800 rounded px-3 py-2"
+            />
+            <div className="flex items-center gap-3">
+              <label className="text-sm opacity-80">Target pages</label>
+              <input type="number" min={8} max={30} value={desiredPages} onChange={(e)=>setDesiredPages(parseInt(e.target.value||"20",10))} className="w-20 bg-neutral-950 border border-neutral-800 rounded px-2 py-1"/>
+              <button disabled={busyScript} onClick={handleGenerateScript} className="ml-auto inline-flex items-center gap-2 bg-fuchsia-500 hover:bg-fuchsia-600 text-white rounded-xl px-4 py-2 shadow">
+                {busyScript ? <Loader2 className="animate-spin" size={16}/> : <Play size={16}/>} Generate Script
+              </button>
+            </div>
+            {parseError && (
+              <div className="mt-2 text-amber-300 text-sm flex items-center gap-2"><AlertTriangle size={16}/> {parseError}</div>
+            )}
+          </div>
+
+          {scriptJSON && (
+            <div className="bg-neutral-900/60 rounded-2xl p-4 border border-neutral-800 space-y-3">
+              <div className="flex items-center gap-2 text-sm opacity-80"><ImageIcon size={16}/> Artwork</div>
+              <div className="flex gap-2">
+                <button onClick={handleIllustratorPass} className="inline-flex items-center gap-2 bg-neutral-800 hover:bg-neutral-700 rounded-xl px-3 py-2">
+                  <Wand2 size={16}/> Build Illustrator Prompts
+                </button>
+                <button disabled={busyImages} onClick={generateAllImages} className="inline-flex items-center gap-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl px-3 py-2">
+                  {busyImages ? <Loader2 className="animate-spin" size={16}/> : <ImageIcon size={16}/>} Generate All Panels
+                </button>
+              </div>
+              <p className="text-xs opacity-70">Tip: You can also generate per-panel below after tweaking descriptions.</p>
+            </div>
+          )}
+
+          {Object.keys(images).length > 0 && (
+            <div className="bg-neutral-900/60 rounded-2xl p-4 border border-neutral-800">
+              <button onClick={downloadZip} className="inline-flex items-center gap-2 bg-indigo-500 hover:bg-indigo-600 text-white rounded-xl px-4 py-2">
+                <Download size={16}/> Export .CBZ (zip)
+              </button>
+            </div>
+          )}
+        </section>
+
+        {/* MIDDLE: Script Viewer/Editor */}
+        <section className="col-span-1 space-y-3">
+          <div className="bg-neutral-900/60 rounded-2xl p-4 border border-neutral-800 h-[80vh] overflow-auto">
+            <div className="flex items-center gap-2 mb-3 text-sm opacity-80"><FileJson size={16}/> Script JSON</div>
+            {!scriptJSON ? (
+              <p className="opacity-60 text-sm">Generate a script to view pages/panels here.</p>
+            ) : (
+              <pre className="text-xs whitespace-pre-wrap break-words">{JSON.stringify(scriptJSON, null, 2)}</pre>
+            )}
+          </div>
+        </section>
+
+        {/* RIGHT: Pages/Panels & Images */}
+        <section className="col-span-1 space-y-3">
+          <div className="bg-neutral-900/60 rounded-2xl p-4 border border-neutral-800 h-[80vh] overflow-auto">
+            <div className="flex items-center gap-2 mb-3 text-sm opacity-80"><ImageIcon size={16}/> Pages & Panels</div>
+            {!scriptJSON ? (
+              <p className="opacity-60 text-sm">Once a script is generated, panels will appear here for image generation and tweaks.</p>
+            ) : (
+              <div className="space-y-6">
+                {pages.map((page) => (
+                  <div key={page.number} className="border border-neutral-800 rounded-xl p-3 bg-neutral-950/60">
+                    <div className="mb-2 font-semibold">Page {page.number}</div>
+                    <div className="grid grid-cols-1 gap-3">
+                      {page.panels.map((panel) => (
+                        <div key={panel.id} className="rounded-lg border border-neutral-800 p-3 bg-neutral-900/50">
+                          <div className="flex items-center justify-between mb-2">
+                            <div className="text-sm font-medium">Panel {panel.id}</div>
+                            <div className="flex items-center gap-2">
+                              <button onClick={()=>generatePanelImage(panel)} className="inline-flex items-center gap-2 bg-neutral-800 hover:bg-neutral-700 rounded px-2 py-1 text-sm"><ImageIcon size={14}/> Generate</button>
+                              <button onClick={()=>{
+                                // simple regen: nudge description for variety
+                                panel.description = panel.description + " (increase drama, stronger lighting)";
+                                generatePanelImage(panel);
+                              }} className="inline-flex items-center gap-2 bg-neutral-800 hover:bg-neutral-700 rounded px-2 py-1 text-sm"><RefreshCw size={14}/> Regen+</button>
+                            </div>
+                          </div>
+                          <div className="grid grid-cols-2 gap-3">
+                            <div>
+                              <label className="text-xs opacity-70">Description</label>
+                              <textarea
+                                className="w-full bg-neutral-950 border border-neutral-800 rounded px-2 py-2 text-sm"
+                                rows={5}
+                                value={panel.description}
+                                onChange={(e)=>{
+                                  panel.description = e.target.value;
+                                  setScriptJSON({...scriptJSON});
+                                }}
+                              />
+                              <div className="grid grid-cols-2 gap-2 mt-2">
+                                <div>
+                                  <label className="text-xs opacity-70">Dialogue</label>
+                                  <textarea
+                                    className="w-full bg-neutral-950 border border-neutral-800 rounded px-2 py-2 text-xs"
+                                    rows={3}
+                                    value={(panel.dialogue||[]).join("\n")}
+                                    onChange={(e)=>{
+                                      panel.dialogue = e.target.value.split(/\n+/).filter(Boolean);
+                                      setScriptJSON({...scriptJSON});
+                                    }}
+                                  />
+                                </div>
+                                <div>
+                                  <label className="text-xs opacity-70">SFX</label>
+                                  <input
+                                    className="w-full bg-neutral-950 border border-neutral-800 rounded px-2 py-2 text-xs"
+                                    value={(panel.sfx||[]).join(", ")}
+                                    onChange={(e)=>{
+                                      panel.sfx = e.target.value.split(",").map(s=>s.trim()).filter(Boolean);
+                                      setScriptJSON({...scriptJSON});
+                                    }}
+                                  />
+                                </div>
+                              </div>
+                              {useIllustratorPass && (
+                                <div className="mt-2">
+                                  <label className="text-xs opacity-70">Illustrator Prompt (AI-generated)</label>
+                                  <textarea
+                                    className="w-full bg-neutral-950 border border-neutral-800 rounded px-2 py-2 text-xs"
+                                    rows={4}
+                                    value={illustratorPrompts[panel.id] || ""}
+                                    onChange={(e)=>{
+                                      setIllustratorPrompts(prev=>({...prev, [panel.id]: e.target.value}));
+                                    }}
+                                  />
+                                </div>
+                              )}
+                            </div>
+                            <div>
+                              <div className="aspect-square border border-neutral-800 rounded-lg overflow-hidden bg-neutral-950 flex items-center justify-center">
+                                {images[panel.id] ? (
+                                  <img src={images[panel.id]} alt={`Panel ${panel.id}`} className="w-full h-full object-contain" />
+                                ) : (
+                                  <div className="text-xs opacity-50 flex flex-col items-center gap-2">
+                                    <ImageIcon size={20}/>
+                                    <span>No image yet</span>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </section>
+      </main>
+
+      <footer className="p-4 text-xs opacity-70 flex items-center gap-3">
+        <span className="italic">{status}</span>
+      </footer>
+    </div>
+  );
+}
+
+// ------------------------------------------------------------
+// Notes:
+// - For production, NEVER ship your API key to the client. Create an API route in Replit (Node/Express or Next.js API route)
+//   that proxies requests to OpenAI. Then replace fetch URL with your endpoint.
+// - Consistency tips: After first pass, lock in the style_bible and feed as a prefix to ALL subsequent calls.
+// - To add speech bubbles programmatically, layer absolutely-positioned divs over images or integrate a lightweight canvas editor.
+// - If you prefer Stable Diffusion or Flux as the illustrator, swap openaiImage with your provider's client and keep the prompts.
+// - Exported .cbz opens in any comic reader app. Enjoy your kaiju saga. 
