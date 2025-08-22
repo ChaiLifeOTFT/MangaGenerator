@@ -1,13 +1,13 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { registerPerplexityRoutes } from "./routes/perplexity";
+import { registerAIEngineRoutes } from "./routes/ai-engines";
 import { registerMangaRoutes } from "./routes/manga";
 import { registerUploadRoutes } from "./routes/upload";
 
 export async function registerRoutes(app: Express): Promise<Server> {
-  // Register Perplexity routes (replacing OpenAI)
-  registerPerplexityRoutes(app);
+  // Register AI Engine routes (OpenAI, HuggingFace, Perplexity with auto-fallback)
+  registerAIEngineRoutes(app);
   
   // Register Manga routes
   registerMangaRoutes(app);
