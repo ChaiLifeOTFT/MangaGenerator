@@ -87,6 +87,42 @@ export default function Sidebar({
             />
           </div>
 
+          {/* File Upload */}
+          <div>
+            <label className="block text-sm font-medium text-neutral-300 mb-2">Or Upload File</label>
+            <input
+              type="file"
+              accept=".pdf,.txt,.doc,.docx,.md,.html,.json"
+              onChange={async (e) => {
+                const file = e.target.files?.[0];
+                if (!file) return;
+                
+                const formData = new FormData();
+                formData.append('file', file);
+                
+                try {
+                  const response = await fetch('/api/upload/file', {
+                    method: 'POST',
+                    body: formData
+                  });
+                  
+                  if (response.ok) {
+                    const data = await response.json();
+                    setInputText(data.text);
+                  } else {
+                    const error = await response.json();
+                    alert(error.error || 'Failed to upload file');
+                  }
+                } catch (error) {
+                  alert('Failed to upload file');
+                }
+              }}
+              className="w-full bg-neutral-800 border border-neutral-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-fuchsia-500 file:mr-3 file:py-1 file:px-3 file:rounded file:border-0 file:text-sm file:font-medium file:bg-fuchsia-500 file:text-white hover:file:bg-fuchsia-600"
+              data-testid="input-file-upload"
+            />
+            <p className="text-xs text-neutral-500 mt-1">Supports PDF, TXT, DOC, DOCX, MD, HTML, JSON</p>
+          </div>
+
           {/* Settings */}
           <div className="grid grid-cols-2 gap-3">
             <div>
@@ -140,6 +176,14 @@ export default function Sidebar({
           Image Generation
         </h3>
 
+        {/* Perplexity API Notice */}
+        <div className="bg-amber-950/30 border border-amber-700/50 rounded-lg p-3 mb-4">
+          <p className="text-xs text-amber-300">
+            <i className="fas fa-info-circle mr-1"></i>
+            Note: Using Perplexity API - Image generation shows placeholders only
+          </p>
+        </div>
+
         <div className="space-y-4">
           <div>
             <label className="block text-sm font-medium text-neutral-300 mb-2">Image Size</label>
@@ -191,7 +235,7 @@ export default function Sidebar({
             ) : (
               <i className="fas fa-images"></i>
             )}
-            Generate All Images
+            Generate All Images (Placeholders)
           </button>
         </div>
       </div>

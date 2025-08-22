@@ -1,15 +1,19 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { registerOpenAIRoutes } from "./routes/openai";
+import { registerPerplexityRoutes } from "./routes/perplexity";
 import { registerMangaRoutes } from "./routes/manga";
+import { registerUploadRoutes } from "./routes/upload";
 
 export async function registerRoutes(app: Express): Promise<Server> {
-  // Register OpenAI routes
-  registerOpenAIRoutes(app);
+  // Register Perplexity routes (replacing OpenAI)
+  registerPerplexityRoutes(app);
   
   // Register Manga routes
   registerMangaRoutes(app);
+  
+  // Register Upload routes
+  registerUploadRoutes(app);
 
   // put application routes here
   // prefix all routes with /api
