@@ -100,7 +100,7 @@ const AI_ENGINES = {
   }
 } as const;
 
-// Text Generation with Multi-Engine Support
+// Text Generation with Multi-Engine Support and Auto-Fallback
 async function generateText(params: {
   system: string;
   user: string;
@@ -119,87 +119,164 @@ async function generateText(params: {
     throw new Error("No text generation engines available");
   }
 
-  // Select engine
-  const selectedEngine = engine && availableEngines.find(([key]) => key === engine)
-    ? engine 
-    : availableEngines[0][0];
+  // Reorder engines to try preferred engine first, then others
+  const orderedEngines = engine && availableEngines.find(([key]) => key === engine)
+    ? [availableEngines.find(([key]) => key === engine)!, ...availableEngines.filter(([key]) => key !== engine)]
+    : availableEngines;
 
-  const engineConfig = AI_ENGINES.text[selectedEngine as keyof typeof AI_ENGINES.text];
-  const selectedModel = model || engineConfig.models[0];
+  let lastError: Error | null = null;
 
-  let res: any;
+  // Try each engine until one succeeds
+  for (const [engineKey, engineConfig] of orderedEngines) {
+    try {
+      console.log(`Trying text engine: ${engineKey}`);
+      
+      const tryModel = model || engineConfig.models[0];
+      let res: any;
 
-  if (selectedEngine === 'huggingface') {
-    // Handle HuggingFace text generation differently
-    const prompt = `${system}\n\nUser: ${user}\nAssistant:`;
-    
-    res = await fetch(`${engineConfig.endpoint}/${selectedModel}`, {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${engineConfig.key}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        inputs: prompt,
-        parameters: {
-          max_new_tokens: max_tokens || 1000,
+      if (engineKey === 'huggingface') {
+        // Handle HuggingFace text generation
+        const prompt = `${system}\n\nUser: ${user}\nAssistant:`;
+        
+        res = await fetch(`${engineConfig.endpoint}/${tryModel}`, {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${engineConfig.key}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            inputs: prompt,
+            parameters: {
+              max_new_tokens: max_tokens || 1000,
+              temperature: temperature || 0.6,
+              return_full_text: false,
+            }
+          }),
+        });
+      } else {
+        // Handle OpenAI and Perplexity
+        const requestBody = {
+          model: tryModel,
+          messages: [
+            { role: "system", content: system },
+            { role: "user", content: user },
+          ],
           temperature: temperature || 0.6,
-          return_full_text: false,
+          max_tokens: max_tokens || 4000,
+        };
+
+        // Add response format for OpenAI engines
+        if (engineKey.startsWith('openai')) {
+          (requestBody as any).response_format = { type: "json_object" };
         }
-      }),
-    });
-  } else {
-    // Handle OpenAI and Perplexity
-    const requestBody = {
-      model: selectedModel,
-      messages: [
-        { role: "system", content: system },
-        { role: "user", content: user },
-      ],
-      temperature: temperature || 0.6,
-      max_tokens: max_tokens || 4000,
-    };
 
-    // Add response format for OpenAI engines
-    if (selectedEngine.startsWith('openai')) {
-      (requestBody as any).response_format = { type: "json_object" };
+        res = await fetch(engineConfig.endpoint, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${engineConfig.key}`,
+          },
+          body: JSON.stringify(requestBody),
+        });
+      }
+
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        const errorMsg = `${engineConfig.name} error: ${res.status} - ${errorData.error?.message || res.statusText}`;
+        console.log(`Engine ${engineKey} failed:`, errorMsg);
+        throw new Error(errorMsg);
+      }
+
+      const data = await res.json();
+      
+      let content: string;
+      if (engineKey === 'huggingface') {
+        content = Array.isArray(data) ? data[0]?.generated_text || "" : data.generated_text || "";
+      } else {
+        content = data.choices?.[0]?.message?.content?.trim() || "";
+      }
+
+      if (content && content.length > 0) {
+        console.log(`Successfully generated text with engine: ${engineKey}`);
+        return { content, engine: engineKey, model: tryModel };
+      } else {
+        throw new Error("Empty response from engine");
+      }
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error("Unknown error");
+      console.log(`Engine ${engineKey} failed, trying next...`, lastError.message);
+      continue;
     }
-
-    res = await fetch(engineConfig.endpoint, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${engineConfig.key}`,
-      },
-      body: JSON.stringify(requestBody),
-    });
   }
 
-  if (!res.ok) {
-    const errorData = await res.json().catch(() => ({}));
-    throw new Error(`${engineConfig.name} error: ${res.status} - ${errorData.error?.message || res.statusText}`);
-  }
-
-  const data = await res.json();
-  
-  let content: string;
-  if (selectedEngine === 'huggingface') {
-    content = Array.isArray(data) ? data[0]?.generated_text || "" : data.generated_text || "";
-  } else {
-    content = data.choices?.[0]?.message?.content?.trim() || "";
-  }
-  
-  return { content, engine: selectedEngine, model: selectedModel };
+  throw new Error(`All text engines failed. Last error: ${lastError?.message || "Unknown error"}`);
 }
 
-// Image Generation with Multi-Engine Support
+// Character consistency storage
+const characterProfiles = new Map<string, {
+  description: string;
+  visualTraits: string;
+  lastUsed: number;
+}>();
+
+// Extract character traits from a prompt for consistency
+function extractCharacterTraits(prompt: string): string {
+  const traits = [];
+  
+  // Hair descriptors
+  const hairMatch = prompt.match(/(long|short|curly|straight|wavy|black|brown|blonde|red|silver|white|blue|pink|green) hair/gi);
+  if (hairMatch) traits.push(...hairMatch);
+  
+  // Eye descriptors
+  const eyeMatch = prompt.match(/(blue|brown|green|hazel|grey|amber|red|purple) eyes/gi);
+  if (eyeMatch) traits.push(...eyeMatch);
+  
+  // Clothing/style
+  const clothingMatch = prompt.match(/(wearing|dressed in|uniform|suit|dress|shirt|jacket|hoodie|kimono|armor)/gi);
+  if (clothingMatch) traits.push(...clothingMatch.slice(0, 2)); // Limit to avoid over-specification
+  
+  // Age/build descriptors
+  const buildMatch = prompt.match(/(young|old|tall|short|slim|athletic|muscular|teenager|adult|child)/gi);
+  if (buildMatch) traits.push(...buildMatch.slice(0, 2));
+  
+  // Generic fallback
+  if (traits.length === 0) {
+    traits.push("distinctive character design", "memorable appearance");
+  }
+  
+  return traits.join(", ");
+}
+
+// Image Generation with Multi-Engine Support, Auto-Fallback, and Character Consistency
 async function generateImage(params: {
   prompt: string;
   engine?: string;
   model?: string;
   size?: string;
+  characterName?: string;
+  isCharacterFocused?: boolean;
 }): Promise<{ imageUrl: string; engine: string; model: string }> {
-  const { prompt, engine, model, size } = params;
+  const { prompt, engine, model, size, characterName, isCharacterFocused } = params;
+
+  // Handle character consistency
+  let enhancedPrompt = prompt;
+  if (characterName && isCharacterFocused) {
+    const profile = characterProfiles.get(characterName);
+    if (profile) {
+      // Use existing character profile for consistency
+      enhancedPrompt = `${profile.description}, ${profile.visualTraits}. ${prompt}. Consistent character design, same facial features, same hair, same clothing style as previous appearances.`;
+      profile.lastUsed = Date.now();
+    } else {
+      // Create new character profile from the prompt
+      const traits = extractCharacterTraits(prompt);
+      characterProfiles.set(characterName, {
+        description: `Character named ${characterName}`,
+        visualTraits: traits,
+        lastUsed: Date.now()
+      });
+      enhancedPrompt = `${traits}. ${prompt}. Establish consistent character design for future reference.`;
+    }
+  }
 
   // Get available image engines
   const availableEngines = Object.entries(AI_ENGINES.image)
@@ -209,78 +286,101 @@ async function generateImage(params: {
     throw new Error("No image generation engines available");
   }
 
-  // Prefer HuggingFace for manga/anime, then OpenAI
-  const selectedEngine = engine && availableEngines.find(([key]) => key === engine)
-    ? engine 
-    : availableEngines.find(([key]) => key === 'huggingface')?.[0] || availableEngines[0][0];
+  // Prefer specified engine, then HuggingFace for manga/anime, then OpenAI
+  const orderedEngines = engine && availableEngines.find(([key]) => key === engine)
+    ? [availableEngines.find(([key]) => key === engine)!, ...availableEngines.filter(([key]) => key !== engine)]
+    : availableEngines.find(([key]) => key === 'huggingface')
+    ? [availableEngines.find(([key]) => key === 'huggingface')!, ...availableEngines.filter(([key]) => key !== 'huggingface')]
+    : availableEngines;
 
-  const engineConfig = AI_ENGINES.image[selectedEngine as keyof typeof AI_ENGINES.image];
-  
-  let imageUrl: string;
-  let selectedModel: string;
+  let lastError: Error | null = null;
 
-  if (selectedEngine === 'huggingface') {
-    const hfModels = engineConfig.models as Record<string, string>;
-    const modelKey = model || 'counterfeit-v25';
-    selectedModel = hfModels[modelKey] || hfModels['counterfeit-v25'];
-    
-    const res = await fetch(`https://api-inference.huggingface.co/models/${selectedModel}`, {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${engineConfig.key}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        inputs: prompt,
-        parameters: {
-          negative_prompt: "blurry, low quality, distorted, bad anatomy, text, watermark",
-          guidance_scale: 7.5,
-          num_inference_steps: 20,
+  // Try each engine until one succeeds
+  for (const [engineKey, engineConfig] of orderedEngines) {
+    try {
+      console.log(`Trying image engine: ${engineKey}`);
+
+      let imageUrl: string;
+      let selectedModel: string;
+
+      if (engineKey === 'huggingface') {
+        const hfModels = engineConfig.models as Record<string, string>;
+        const modelKey = model || 'counterfeit-v25';
+        selectedModel = hfModels[modelKey] || hfModels['counterfeit-v25'];
+        
+        const res = await fetch(`https://api-inference.huggingface.co/models/${selectedModel}`, {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${engineConfig.key}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            inputs: enhancedPrompt,
+            parameters: {
+              negative_prompt: "blurry, low quality, distorted, bad anatomy, text, watermark, inconsistent character design, different face, different hair, different clothing",
+              guidance_scale: 7.5,
+              num_inference_steps: 25,
+              seed: characterName ? characterName.split('').reduce((a, b) => a + b.charCodeAt(0), 0) : undefined,
+            }
+          }),
+        });
+
+        if (!res.ok) {
+          if (res.status === 503) {
+            throw new Error("Model is warming up. Please try again in 30-60 seconds.");
+          }
+          throw new Error(`HuggingFace error: ${res.status}`);
         }
-      }),
-    });
 
-    if (!res.ok) {
-      if (res.status === 503) {
-        throw new Error("Model is warming up. Please try again in 30-60 seconds.");
+        const arrayBuffer = await res.arrayBuffer();
+        const base64 = Buffer.from(arrayBuffer).toString('base64');
+        imageUrl = `data:image/png;base64,${base64}`;
+      } else {
+        // OpenAI engines
+        selectedModel = 'dall-e-3';
+        const res = await fetch("https://api.openai.com/v1/images/generations", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${engineConfig.key}`,
+          },
+          body: JSON.stringify({
+            model: selectedModel,
+            prompt: enhancedPrompt,
+            size: size || "1024x1024",
+            response_format: "b64_json",
+          }),
+        });
+
+        if (!res.ok) {
+          const errorData = await res.json().catch(() => ({}));
+          const errorMsg = `${engineConfig.name} error: ${res.status} - ${errorData.error?.message || res.statusText}`;
+          console.log(`Engine ${engineKey} failed:`, errorMsg);
+          throw new Error(errorMsg);
+        }
+
+        const data = await res.json();
+        const b64 = data.data?.[0]?.b64_json;
+        if (!b64) {
+          throw new Error("No image returned from OpenAI.");
+        }
+        imageUrl = `data:image/png;base64,${b64}`;
       }
-      throw new Error(`HuggingFace error: ${res.status}`);
-    }
 
-    const arrayBuffer = await res.arrayBuffer();
-    const base64 = Buffer.from(arrayBuffer).toString('base64');
-    imageUrl = `data:image/png;base64,${base64}`;
-  } else {
-    // OpenAI engines
-    selectedModel = 'dall-e-3';
-    const res = await fetch("https://api.openai.com/v1/images/generations", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${engineConfig.key}`,
-      },
-      body: JSON.stringify({
-        model: selectedModel,
-        prompt,
-        size: size || "1024x1024",
-        response_format: "b64_json",
-      }),
-    });
-
-    if (!res.ok) {
-      const errorData = await res.json().catch(() => ({}));
-      throw new Error(`${engineConfig.name} error: ${res.status} - ${errorData.error?.message || res.statusText}`);
+      if (imageUrl) {
+        console.log(`Successfully generated image with engine: ${engineKey}`);
+        return { imageUrl, engine: engineKey, model: selectedModel };
+      } else {
+        throw new Error("Empty image response");
+      }
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error("Unknown error");
+      console.log(`Engine ${engineKey} failed, trying next...`, lastError.message);
+      continue;
     }
-
-    const data = await res.json();
-    const b64 = data.data?.[0]?.b64_json;
-    if (!b64) {
-      throw new Error("No image returned from OpenAI.");
-    }
-    imageUrl = `data:image/png;base64,${b64}`;
   }
 
-  return { imageUrl, engine: selectedEngine, model: selectedModel };
+  throw new Error(`All image engines failed. Last error: ${lastError?.message || "Unknown error"}`);
 }
 
 // Voice Generation with ElevenLabs
@@ -442,7 +542,9 @@ export function registerCompleteAIRoutes(app: Express) {
             prompt: image.prompt || prompt,
             engine: imageEngine,
             model: imageModel,
-            size: image.size
+            size: image.size,
+            characterName: image.characterName,
+            isCharacterFocused: image.isCharacterFocused
           });
           results.image = imageResult;
         } catch (error) {
@@ -554,5 +656,22 @@ export function registerCompleteAIRoutes(app: Express) {
     } catch (error) {
       res.status(500).json({ error: error instanceof Error ? error.message : "Image generation failed" });
     }
+  });
+
+  // Character Management API
+  app.get("/api/ai/characters", (req: Request, res: Response) => {
+    const characters = Array.from(characterProfiles.entries()).map(([name, profile]) => ({
+      name,
+      description: profile.description,
+      visualTraits: profile.visualTraits,
+      lastUsed: profile.lastUsed
+    }));
+    res.json({ characters });
+  });
+
+  app.delete("/api/ai/characters/:name", (req: Request, res: Response) => {
+    const { name } = req.params;
+    const deleted = characterProfiles.delete(name);
+    res.json({ success: deleted, message: deleted ? 'Character deleted' : 'Character not found' });
   });
 }
