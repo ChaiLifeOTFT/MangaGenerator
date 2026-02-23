@@ -1,0 +1,467 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MangaForge — AI Manga Generator</title>
+  <meta name="description" content="Transform your stories into manga with AI. Generate scripts, panels, and full chapters from text. Export as CBZ.">
+  <style>
+    :root {
+      --bg: #0a0a0f;
+      --surface: #12121a;
+      --border: #1e1e2e;
+      --text: #e0e0e8;
+      --dim: #8888a0;
+      --accent: #e85d75;
+      --accent2: #7c5cbf;
+      --accent3: #5bc4e8;
+      --glow: rgba(232, 93, 117, 0.15);
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      overflow-x: hidden;
+    }
+
+    .container { max-width: 1100px; margin: 0 auto; padding: 0 24px; }
+
+    /* Nav */
+    nav {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+      background: rgba(10, 10, 15, 0.85);
+      backdrop-filter: blur(20px);
+      border-bottom: 1px solid var(--border);
+      padding: 16px 0;
+    }
+    nav .container { display: flex; justify-content: space-between; align-items: center; }
+    .logo { font-size: 1.4rem; font-weight: 700; letter-spacing: -0.5px; }
+    .logo span { color: var(--accent); }
+    .nav-links { display: flex; gap: 24px; align-items: center; }
+    .nav-links a { color: var(--dim); text-decoration: none; font-size: 0.9rem; transition: color 0.2s; }
+    .nav-links a:hover { color: var(--text); }
+
+    /* Hero */
+    .hero {
+      padding: 140px 0 80px;
+      text-align: center;
+      position: relative;
+    }
+    .hero::before {
+      content: '';
+      position: absolute; top: 0; left: 50%; transform: translateX(-50%);
+      width: 600px; height: 600px;
+      background: radial-gradient(circle, var(--glow) 0%, transparent 70%);
+      pointer-events: none;
+    }
+    .hero h1 {
+      font-size: clamp(2.5rem, 6vw, 4rem);
+      font-weight: 800;
+      line-height: 1.1;
+      margin-bottom: 20px;
+      letter-spacing: -1px;
+    }
+    .hero h1 .accent { color: var(--accent); }
+    .hero h1 .accent2 { color: var(--accent2); }
+    .hero p {
+      font-size: 1.15rem;
+      color: var(--dim);
+      max-width: 580px;
+      margin: 0 auto 36px;
+    }
+
+    /* Buttons */
+    .btn {
+      display: inline-block;
+      padding: 14px 32px;
+      border-radius: 8px;
+      font-size: 1rem;
+      font-weight: 600;
+      text-decoration: none;
+      transition: all 0.2s;
+      cursor: pointer;
+      border: none;
+    }
+    .btn-primary {
+      background: var(--accent);
+      color: white;
+    }
+    .btn-primary:hover { background: #d04a63; transform: translateY(-1px); }
+    .btn-secondary {
+      background: transparent;
+      color: var(--text);
+      border: 1px solid var(--border);
+      margin-left: 12px;
+    }
+    .btn-secondary:hover { border-color: var(--dim); }
+
+    /* Pipeline demo */
+    .pipeline {
+      display: flex;
+      justify-content: center;
+      gap: 8px;
+      margin: 48px 0 0;
+      flex-wrap: wrap;
+    }
+    .pipe-step {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px 20px;
+      text-align: center;
+      min-width: 120px;
+    }
+    .pipe-step .icon { font-size: 1.6rem; margin-bottom: 6px; }
+    .pipe-step .label { font-size: 0.8rem; color: var(--dim); }
+    .pipe-arrow { display: flex; align-items: center; color: var(--accent); font-size: 1.2rem; }
+
+    /* Features */
+    .features { padding: 80px 0; }
+    .section-title {
+      text-align: center;
+      font-size: 2rem;
+      font-weight: 700;
+      margin-bottom: 48px;
+      letter-spacing: -0.5px;
+    }
+    .feature-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 24px;
+    }
+    .feature-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 28px;
+      transition: border-color 0.2s;
+    }
+    .feature-card:hover { border-color: var(--accent); }
+    .feature-card h3 { font-size: 1.1rem; margin-bottom: 8px; }
+    .feature-card p { color: var(--dim); font-size: 0.9rem; }
+    .feature-card .tag {
+      display: inline-block;
+      background: rgba(232, 93, 117, 0.1);
+      color: var(--accent);
+      font-size: 0.75rem;
+      padding: 3px 10px;
+      border-radius: 4px;
+      margin-bottom: 12px;
+    }
+
+    /* Pricing */
+    .pricing { padding: 80px 0; }
+    .price-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 24px;
+      max-width: 960px;
+      margin: 0 auto;
+    }
+    .price-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 32px;
+      text-align: center;
+      position: relative;
+    }
+    .price-card.featured {
+      border-color: var(--accent);
+      box-shadow: 0 0 40px var(--glow);
+    }
+    .price-card .badge {
+      position: absolute;
+      top: -12px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: var(--accent);
+      color: white;
+      font-size: 0.75rem;
+      font-weight: 600;
+      padding: 4px 14px;
+      border-radius: 20px;
+    }
+    .price-card h3 { font-size: 1.2rem; margin-bottom: 8px; }
+    .price-card .price {
+      font-size: 2.5rem;
+      font-weight: 800;
+      margin: 12px 0 4px;
+    }
+    .price-card .price span { font-size: 1rem; color: var(--dim); font-weight: 400; }
+    .price-card .per-credit { color: var(--dim); font-size: 0.85rem; margin-bottom: 20px; }
+    .price-card ul {
+      list-style: none;
+      text-align: left;
+      margin: 20px 0;
+    }
+    .price-card li {
+      padding: 6px 0;
+      color: var(--dim);
+      font-size: 0.9rem;
+    }
+    .price-card li::before {
+      content: '\2713';
+      color: var(--accent);
+      margin-right: 8px;
+      font-weight: 700;
+    }
+
+    /* How it works */
+    .how-it-works { padding: 80px 0; }
+    .steps {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 32px;
+      text-align: center;
+    }
+    .step-num {
+      width: 48px; height: 48px;
+      border-radius: 50%;
+      background: rgba(232, 93, 117, 0.1);
+      color: var(--accent);
+      font-weight: 700;
+      font-size: 1.2rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 16px;
+    }
+    .step h3 { margin-bottom: 8px; }
+    .step p { color: var(--dim); font-size: 0.9rem; }
+
+    /* CTA */
+    .cta {
+      padding: 80px 0;
+      text-align: center;
+    }
+    .cta-box {
+      background: linear-gradient(135deg, rgba(232, 93, 117, 0.1), rgba(124, 92, 191, 0.1));
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 48px;
+    }
+    .cta-box h2 { font-size: 2rem; margin-bottom: 12px; }
+    .cta-box p { color: var(--dim); margin-bottom: 28px; }
+
+    /* Footer */
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 32px 0;
+      text-align: center;
+      color: var(--dim);
+      font-size: 0.85rem;
+    }
+    footer a { color: var(--accent); text-decoration: none; }
+
+    @media (max-width: 640px) {
+      .pipeline { flex-direction: column; align-items: center; }
+      .pipe-arrow { transform: rotate(90deg); }
+      .btn-secondary { margin-left: 0; margin-top: 12px; }
+      .hero .buttons { display: flex; flex-direction: column; align-items: center; }
+    }
+  </style>
+</head>
+<body>
+  <nav>
+    <div class="container">
+      <div class="logo">Manga<span>Forge</span></div>
+      <div class="nav-links">
+        <a href="#features">Features</a>
+        <a href="#pricing">Pricing</a>
+        <a href="#how">How It Works</a>
+        <a href="/" class="btn btn-primary" style="padding: 8px 20px; font-size: 0.85rem;">Open App</a>
+      </div>
+    </div>
+  </nav>
+
+  <section class="hero">
+    <div class="container">
+      <h1>Your Story.<br><span class="accent">AI-Generated</span> <span class="accent2">Manga.</span></h1>
+      <p>Paste your story, novel, or idea. MangaForge turns it into a full manga chapter with panels, dialogue, and art — ready to read or publish.</p>
+      <div class="buttons">
+        <a href="/" class="btn btn-primary">Start Creating Free</a>
+        <a href="#pricing" class="btn btn-secondary">See Pricing</a>
+      </div>
+
+      <div class="pipeline">
+        <div class="pipe-step">
+          <div class="icon">&#128221;</div>
+          <div class="label">Your Story</div>
+        </div>
+        <div class="pipe-arrow">&#8594;</div>
+        <div class="pipe-step">
+          <div class="icon">&#129302;</div>
+          <div class="label">AI Script</div>
+        </div>
+        <div class="pipe-arrow">&#8594;</div>
+        <div class="pipe-step">
+          <div class="icon">&#127912;</div>
+          <div class="label">Panel Art</div>
+        </div>
+        <div class="pipe-arrow">&#8594;</div>
+        <div class="pipe-step">
+          <div class="icon">&#128218;</div>
+          <div class="label">CBZ Export</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="features" id="features">
+    <div class="container">
+      <h2 class="section-title">Built for Creators</h2>
+      <div class="feature-grid">
+        <div class="feature-card">
+          <div class="tag">AI Script Engine</div>
+          <h3>Story to Script in Seconds</h3>
+          <p>Paste any text — a novel chapter, a short story, an outline — and get a structured manga script with pages, panels, dialogue, and SFX.</p>
+        </div>
+        <div class="feature-card">
+          <div class="tag">Multi-Engine</div>
+          <h3>Best-in-Class Image Generation</h3>
+          <p>DALL-E 3, Stable Diffusion, anime-tuned models. MangaForge picks the best engine for each panel and falls back automatically.</p>
+        </div>
+        <div class="feature-card">
+          <div class="tag">Character Consistency</div>
+          <h3>Same Characters, Every Panel</h3>
+          <p>Character profiles track visual traits across the entire chapter. Seed-based generation keeps faces, hair, and outfits consistent.</p>
+        </div>
+        <div class="feature-card">
+          <div class="tag">Full Control</div>
+          <h3>Edit Everything Before Export</h3>
+          <p>Review and edit panel descriptions, dialogue, and SFX before generating images. Regenerate individual panels until they're perfect.</p>
+        </div>
+        <div class="feature-card">
+          <div class="tag">CBZ Export</div>
+          <h3>Publish-Ready Output</h3>
+          <p>Download as CBZ (comic book format) compatible with every manga reader. Includes the script JSON for future editing.</p>
+        </div>
+        <div class="feature-card">
+          <div class="tag">Upload</div>
+          <h3>Import Any Format</h3>
+          <p>Upload PDF, DOCX, TXT, or Markdown files. MangaForge extracts the text and starts generating your manga immediately.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="how-it-works" id="how">
+    <div class="container">
+      <h2 class="section-title">How It Works</h2>
+      <div class="steps">
+        <div class="step">
+          <div class="step-num">1</div>
+          <h3>Paste Your Story</h3>
+          <p>Drop in any text — a chapter, an outline, even a single scene description. Or upload a file.</p>
+        </div>
+        <div class="step">
+          <div class="step-num">2</div>
+          <h3>AI Writes the Script</h3>
+          <p>GPT-4o analyzes your story and generates a structured manga script with pages, panels, dialogue, and staging notes.</p>
+        </div>
+        <div class="step">
+          <div class="step-num">3</div>
+          <h3>Generate Panel Art</h3>
+          <p>Each panel gets an AI-generated manga illustration. Edit prompts, regenerate panels, or generate the entire chapter at once.</p>
+        </div>
+        <div class="step">
+          <div class="step-num">4</div>
+          <h3>Export & Publish</h3>
+          <p>Download your finished chapter as a CBZ file. Read it in any comic viewer, or upload to Webtoon, Tapas, or Gumroad.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="pricing" id="pricing">
+    <div class="container">
+      <h2 class="section-title">Simple Credit Pricing</h2>
+      <p style="text-align: center; color: var(--dim); margin: -32px 0 40px;">Script generation is free. 1 credit = 1 panel image.</p>
+      <div class="price-grid">
+        <div class="price-card">
+          <h3>Free Tier</h3>
+          <div class="price">$0</div>
+          <div class="per-credit">5 free credits to start</div>
+          <ul>
+            <li>5 panel images</li>
+            <li>Unlimited script generation</li>
+            <li>CBZ export</li>
+            <li>All AI engines</li>
+          </ul>
+          <a href="/" class="btn btn-secondary" style="width: 100%;">Get Started</a>
+        </div>
+        <div class="price-card featured">
+          <div class="badge">Best Value</div>
+          <h3>Creator Pack</h3>
+          <div class="price">$19.99 <span>one-time</span></div>
+          <div class="per-credit">$0.40 per panel</div>
+          <ul>
+            <li>50 panel images</li>
+            <li>Unlimited script generation</li>
+            <li>CBZ export</li>
+            <li>Priority generation</li>
+          </ul>
+          <a href="#" class="btn btn-primary buy-btn" data-package="creator" style="width: 100%;">Buy Credits</a>
+        </div>
+        <div class="price-card">
+          <h3>Studio Pack</h3>
+          <div class="price">$69.99 <span>one-time</span></div>
+          <div class="per-credit">$0.35 per panel</div>
+          <ul>
+            <li>200 panel images</li>
+            <li>Unlimited script generation</li>
+            <li>CBZ export</li>
+            <li>Priority generation</li>
+          </ul>
+          <a href="#" class="btn btn-secondary buy-btn" data-package="studio" style="width: 100%;">Buy Credits</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="cta">
+    <div class="container">
+      <div class="cta-box">
+        <h2>Turn Your Story Into Manga Today</h2>
+        <p>No design skills needed. No drawing required. Just your story and AI.</p>
+        <a href="/" class="btn btn-primary">Start Creating Free</a>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <div class="container">
+      <p>MangaForge &mdash; AI-Powered Manga Generation &mdash; Built by <a href="https://github.com/ChaiLifeOTFT">ChaiLifeOTFT</a></p>
+    </div>
+  </footer>
+
+  <script>
+    document.querySelectorAll('.buy-btn').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.preventDefault();
+        const pkg = btn.dataset.package;
+        try {
+          const res = await fetch('/api/payment/checkout', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ packageId: pkg, userId: 'visitor' }),
+          });
+          const data = await res.json();
+          if (data.url) {
+            window.location.href = data.url;
+          } else if (data.error) {
+            alert(data.message || data.error);
+          }
+        } catch (err) {
+          alert('Payments coming soon. The app is free to try!');
+        }
+      });
+    });
+  </script>
+</body>
+</html>

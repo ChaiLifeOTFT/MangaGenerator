@@ -126,13 +126,14 @@ async function generateText(params: {
     throw new Error("No text generation engines available");
   }
 
-  // Reorder engines: Try non-OpenAI engines first (Perplexity, HuggingFace), then OpenAI engines
-  const nonOpenAIEngines = availableEngines.filter(([key]) => !key.startsWith('openai'));
+  // Reorder engines: OpenAI first (best quality), then other real engines, mock last
   const openAIEngines = availableEngines.filter(([key]) => key.startsWith('openai'));
-  
+  const otherRealEngines = availableEngines.filter(([key]) => !key.startsWith('openai') && key !== 'mock');
+  const mockEngines = availableEngines.filter(([key]) => key === 'mock');
+
   const orderedEngines = engine && availableEngines.find(([key]) => key === engine)
     ? [availableEngines.find(([key]) => key === engine)!, ...availableEngines.filter(([key]) => key !== engine)]
-    : [...nonOpenAIEngines, ...openAIEngines];
+    : [...openAIEngines, ...otherRealEngines, ...mockEngines];
 
   let lastError: Error | null = null;
 
@@ -339,12 +340,10 @@ async function generateImage(params: {
     throw new Error("No image generation engines available");
   }
 
-  // Prefer specified engine, then HuggingFace for manga/anime, then OpenAI
+  // Prefer specified engine, then OpenAI DALL-E (best quality), then HuggingFace
   const orderedEngines = engine && availableEngines.find(([key]) => key === engine)
     ? [availableEngines.find(([key]) => key === engine)!, ...availableEngines.filter(([key]) => key !== engine)]
-    : availableEngines.find(([key]) => key === 'huggingface')
-    ? [availableEngines.find(([key]) => key === 'huggingface')!, ...availableEngines.filter(([key]) => key !== 'huggingface')]
-    : availableEngines;
+    : [...availableEngines.filter(([key]) => key.startsWith('openai')), ...availableEngines.filter(([key]) => !key.startsWith('openai'))];
 
   let lastError: Error | null = null;
 
