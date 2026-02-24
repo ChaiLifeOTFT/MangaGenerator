@@ -6,6 +6,7 @@ import { registerCompleteAIRoutes } from "./routes/complete-ai-system";
 import { registerMangaRoutes } from "./routes/manga";
 import { registerUploadRoutes } from "./routes/upload";
 import { registerPaymentRoutes } from "./routes/payments";
+import { registerGalleryRoutes } from "./routes/gallery";
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // Health endpoint (DigiUs compatible)
@@ -35,6 +36,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Register Upload routes
   registerUploadRoutes(app);
+
+  // Register Gallery routes (browse + download manga)
+  registerGalleryRoutes(app);
 
   const httpServer = createServer(app);
   return httpServer;
