@@ -10,6 +10,8 @@ const HF_MODELS = {
   'waifu-diffusion': 'hakurei/waifu-diffusion',
   'stable-diffusion-xl': 'stabilityai/stable-diffusion-xl-base-1.0',
   'anything-v4': 'andite/anything-v4.0',
+  'flux-schnell': 'black-forest-labs/FLUX.1-schnell',
+  'flux-dev': 'black-forest-labs/FLUX.1-dev',
 } as const;
 
 type HFModelKey = keyof typeof HF_MODELS;
@@ -28,6 +30,20 @@ async function hfImage(prompt: string, model: HFModelKey = 'counterfeit-v25'): P
   }
 
   const modelPath = HF_MODELS[model];
+
+  // FLUX models use different parameters (no CFG, fewer steps)
+  const isFluxModel = model === 'flux-schnell' || model === 'flux-dev';
+  const parameters = isFluxModel
+    ? {
+        guidance_scale: 0.0,
+        num_inference_steps: model === 'flux-schnell' ? 4 : 20,
+      }
+    : {
+        negative_prompt: "blurry, low quality, distorted, bad anatomy",
+        guidance_scale: 7.5,
+        num_inference_steps: 20,
+      };
+
   const res = await fetch(
     `https://api-inference.huggingface.co/models/${modelPath}`,
     {
@@ -36,13 +52,9 @@ async function hfImage(prompt: string, model: HFModelKey = 'counterfeit-v25'): P
         "Authorization": `Bearer ${HF_API_KEY}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ 
+      body: JSON.stringify({
         inputs: prompt,
-        parameters: {
-          negative_prompt: "blurry, low quality, distorted, bad anatomy",
-          guidance_scale: 7.5,
-          num_inference_steps: 20,
-        }
+        parameters,
       }),
     }
   );

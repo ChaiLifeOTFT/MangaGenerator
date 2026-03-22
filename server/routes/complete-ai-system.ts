@@ -85,7 +85,9 @@ const AI_ENGINES = {
         'stable-diffusion-xl': 'stabilityai/stable-diffusion-xl-base-1.0',
         'anything-v4': 'andite/anything-v4.0',
         'anime-diffusion': 'Ojimi/anime-kawai-diffusion',
-        'manga-diffusion': 'ogkalu/Comic-Diffusion'
+        'manga-diffusion': 'ogkalu/Comic-Diffusion',
+        'flux-schnell': 'black-forest-labs/FLUX.1-schnell',
+        'flux-dev': 'black-forest-labs/FLUX.1-dev'
       },
       available: !!HF_API_KEY
     }
@@ -360,6 +362,21 @@ async function generateImage(params: {
         const modelKey = model || 'counterfeit-v25';
         selectedModel = hfModels[modelKey] || hfModels['counterfeit-v25'];
         
+        // FLUX models use different parameters (no CFG, fewer steps)
+        const isFluxModel = modelKey === 'flux-schnell' || modelKey === 'flux-dev';
+        const hfParams = isFluxModel
+          ? {
+              guidance_scale: 0.0,
+              num_inference_steps: modelKey === 'flux-schnell' ? 4 : 20,
+              seed: characterName ? characterName.split('').reduce((a: number, b: string) => a + b.charCodeAt(0), 0) : undefined,
+            }
+          : {
+              negative_prompt: "blurry, low quality, distorted, bad anatomy, text, watermark, inconsistent character design, different face, different hair, different clothing",
+              guidance_scale: 7.5,
+              num_inference_steps: 25,
+              seed: characterName ? characterName.split('').reduce((a, b) => a + b.charCodeAt(0), 0) : undefined,
+            };
+
         const res = await fetch(`https://api-inference.huggingface.co/models/${selectedModel}`, {
           method: "POST",
           headers: {
@@ -368,12 +385,7 @@ async function generateImage(params: {
           },
           body: JSON.stringify({
             inputs: enhancedPrompt,
-            parameters: {
-              negative_prompt: "blurry, low quality, distorted, bad anatomy, text, watermark, inconsistent character design, different face, different hair, different clothing",
-              guidance_scale: 7.5,
-              num_inference_steps: 25,
-              seed: characterName ? characterName.split('').reduce((a, b) => a + b.charCodeAt(0), 0) : undefined,
-            }
+            parameters: hfParams
           }),
         });
 

@@ -2,6 +2,7 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import path from "path";
 import { storage } from "./storage";
+import { registerHealthRoutes } from "./routes/health";
 import { registerCompleteAIRoutes } from "./routes/complete-ai-system";
 import { registerMangaRoutes } from "./routes/manga";
 import { registerUploadRoutes } from "./routes/upload";
@@ -9,16 +10,12 @@ import { registerPaymentRoutes } from "./routes/payments";
 import { registerGalleryRoutes } from "./routes/gallery";
 
 export async function registerRoutes(app: Express): Promise<Server> {
-  // Health endpoint (DigiUs compatible)
-  app.get("/health", (_req, res) => {
-    res.json({
-      status: "alive",
-      service: "MangaForge",
-      port: parseInt(process.env.PORT || '5020'),
-      uptime: process.uptime(),
-      timestamp: Date.now() / 1000,
-    });
-  });
+  // ── Health checks (DigiUs + k8s/Docker compatible) ──────────────────────────
+  // /health          — full deep report
+  // /health/live     — liveness probe
+  // /health/ready    — readiness probe
+  // /health/startup  — startup probe
+  registerHealthRoutes(app);
 
   // Landing page
   app.get("/landing", (_req, res) => {
