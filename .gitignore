@@ -12,3 +12,7 @@ tests/
 **/test/**
 **/*.test.*
 **/*.spec.*
+# never commit secrets
+.env
+.env.*
+!.env.example
