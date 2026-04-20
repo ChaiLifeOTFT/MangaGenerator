@@ -29,6 +29,16 @@ If you want a **ready-to-use manga creation tool** without setting up the full s
 
 **[Drake Studio on Gumroad — $29](https://sweepsy.gumroad.com/l/umsdf)**
 
+---
+
+## Part of Drake Enterprise
+
+This repo is one piece of the Drake Enterprise LLC / OhananahO mesh ecosystem. For the full fiction + protocol catalog — SolPunk novels, Decision Council, dreamwork kits — see:
+
+- [Drake Enterprise Catalog (HTML)](https://chailifeotft.github.io/PUSH-Protocol/catalog.html)
+- [P.U.S.H. Protocol repo](https://github.com/ChaiLifeOTFT/PUSH-Protocol)
+- [drakeent.gumroad.com](https://drakeent.gumroad.com)
+
 Includes: character generation, panel composition, story flow, and ADHD-friendly workflow design. No server setup required.
 
 ## Setup (dev)
